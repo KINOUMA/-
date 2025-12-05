@@ -1,0 +1,721 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>教室席替えシステム（青基調＋手動保存・復元＋横8列整列）</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root{
+      --bg: #f4f7fb;
+      --ink: #0e192e;
+      --accent: #1e72ff;
+      --accent-dark: #0b3e9b;
+      --accent-muted: #cfe0ff;
+      --card: #ffffff;
+      --border: #c9d5ea;
+      --seat: #e8f1ff;
+      --seat-border: #a6c0e8;
+      --assigned: #c8f0ff;
+      --shadow: 0 10px 30px rgba(20,45,100,.12);
+
+      --room-w: 1400px;
+      --room-h: 850px;
+
+      --token-fg:#ffffff;
+      --token-shadow: rgba(26,86,219,.35);
+
+      --search-bg:#ffffff;
+      --search-border:#c9d5ea;
+      --search-shadow: 0 8px 22px rgba(20,45,100,.15);
+    }
+
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      font-family:system-ui, -apple-system, "Segoe UI", Roboto, "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Helvetica Neue", Arial, "Yu Gothic", Meiryo, sans-serif;
+      background: linear-gradient(180deg, #f0f5ff 0%, var(--bg) 100%);
+      color:var(--ink);
+    }
+
+    header{
+      padding:16px 20px;
+      background:linear-gradient(90deg, #eaf2ff, #f5f9ff);
+      border-bottom:1px solid var(--border);
+    }
+    header h1{ margin:0; font-size:20px; letter-spacing:.02em; color:#0e1f44; }
+
+    .wrap{
+      max-width:1600px;
+      margin:0 auto;
+      padding:20px;
+      display:grid;
+      grid-template-columns: 1fr 360px;
+      gap:20px;
+    }
+    @media(max-width:1100px){ .wrap{grid-template-columns: 1fr} }
+
+    /* 教室カード */
+    #classroom{
+      position:relative;
+      width:var(--room-w);
+      height:var(--room-h);
+      margin:0 auto;
+      background:
+        radial-gradient(1200px 500px at 50% -200px, rgba(162,200,255,.25), transparent 60%),
+        linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+      border:1px solid var(--border);
+      border-radius:20px;
+      box-shadow:var(--shadow);
+      overflow:hidden;
+    }
+    @media(max-width:1500px){
+      #classroom{
+        width:min(var(--room-w), 95vw);
+        height:calc(min(var(--room-w), 95vw) * (850/1400));
+      }
+    }
+
+    /* ホワイトボード */
+    #whiteboard{
+      position:absolute;
+      top:14px; left:50%; transform:translateX(-50%);
+      width:50%; min-width:380px; height:82px;
+      background:linear-gradient(180deg, #f9fbff, #eef5ff);
+      border:2px solid #9dc2ff;
+      border-radius:14px;
+      display:flex; align-items:center; justify-content:center;
+      font-weight:800; color:#143a72; letter-spacing:.03em;
+      box-shadow:0 8px 18px rgba(20,45,100,.12);
+      z-index:1;
+    }
+
+    /* 座席 */
+    .seat{
+      position:absolute;
+      width:86px; height:86px;
+      background:var(--seat);
+      border:2px solid var(--seat-border);
+      border-radius:14px;
+      display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px;
+      cursor:grab; user-select:none;
+      box-shadow:0 6px 14px rgba(20,45,100,.12);
+      transition:transform .25s ease, box-shadow .25s ease, background .25s ease, border-color .25s ease;
+    }
+    .seat:active{ cursor:grabbing; }
+    .seat .label{ font-size:12px; color:#2a4676; }
+    .seat .seat-no{ font-weight:800; color:#0c2c63; font-size:15px; letter-spacing:.02em; }
+    .seat .student-badge{
+      margin-top:4px; min-width:56px; padding:6px 12px; border-radius:999px;
+      background:#eef6ff; color:#0b3e9b; border:1px solid #bcd3ff; font-weight:900;
+      font-size:24px; opacity:0; transform:scale(.85);
+      box-shadow:0 4px 10px rgba(20,45,100,.10);
+    }
+    .seat .student-badge.show{ opacity:1 !important; transform:scale(1) !important; }
+
+    /* 割り当てエフェクト */
+    .seat.assigned{
+      background:var(--assigned);
+      box-shadow:0 0 0 0 rgba(30,114,255,0);
+      animation:seatPulse 900ms ease both;
+    }
+    .seat.assigned .student-badge{ animation:badgePop 700ms 150ms cubic-bezier(.2,.8,.2,1) both; }
+    @keyframes seatPulse{
+      0%{transform:scale(1); box-shadow:0 0 0 0 rgba(30,114,255,.0);}
+      35%{transform:scale(1.24); box-shadow:0 0 30px 10px rgba(30,114,255,.40);}
+      100%{transform:scale(1); box-shadow:0 0 0 0 rgba(30,114,255,.0);}
+    }
+    @keyframes badgePop{
+      0%{opacity:0; transform:scale(.6) translateY(-6px) rotate(-4deg);}
+      60%{opacity:1; transform:scale(1.26) translateY(0) rotate(1.5deg);}
+      100%{transform:scale(1);}
+    }
+
+    .dragging{ outline:2px dashed #98bbff; outline-offset:-4px; }
+
+    /* 割り当てオーバーレイ */
+    .assign-overlay{ position:absolute; inset:0; pointer-events:none; z-index:3; }
+    .overlay-dim{
+      position:absolute; inset:0;
+      background:radial-gradient(ellipse at center, rgba(20,45,100,.16), rgba(20,45,100,.05) 55%, transparent 75%);
+      opacity:0; transition:opacity 220ms ease;
+    }
+    .assign-overlay.active .overlay-dim{ opacity:1; }
+
+    /* トークン */
+    .token{
+      position:absolute; width:92px; height:92px; border-radius:50%;
+      display:flex; align-items:center; justify-content:center;
+      font-size:38px; font-weight:900; color:var(--token-fg);
+      background:
+        radial-gradient(120px 60px at 60% 20%, rgba(255,255,255,.35), rgba(255,255,255,0)),
+        conic-gradient(from 210deg at 50% 50%, #3a86ff, #1e72ff, #0b3e9b, #3a86ff);
+      box-shadow:0 14px 32px var(--token-shadow);
+      border:2px solid rgba(255,255,255,.55);
+      text-shadow:0 1px 0 rgba(0,0,0,.18);
+      transform:translate(-50%,-50%) scale(.9);
+      opacity:0;
+      transition:
+        left 820ms cubic-bezier(.2,.8,.2,1),
+        top  820ms cubic-bezier(.2,.8,.2,1),
+        opacity 360ms ease,
+        transform 300ms ease;
+      will-change:left, top, transform, opacity;
+    }
+    .token.gather{ opacity:1; transform:translate(-50%,-50%) scale(1.3); }
+
+    /* カウントダウン */
+    .countdown{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center; z-index:5; }
+    .countdown .ring{
+      position:absolute; width:280px; height:280px; border-radius:50%;
+      border:8px solid rgba(30,114,255,.25);
+      box-shadow:0 0 22px rgba(30,114,255,.35);
+      animation:ringPulse 1000ms ease forwards;
+    }
+    .countdown .num{
+      font-size:160px; font-weight:1000; color:#1e72ff;
+      text-shadow:0 0 24px rgba(30,114,255,.55), 0 6px 18px rgba(0,0,0,.25);
+      opacity:0; animation:numPulse 1000ms ease forwards;
+    }
+    @keyframes ringPulse{
+      0%{transform:scale(.6); opacity:.0;}
+      25%{transform:scale(1.15); opacity:1;}
+      100%{transform:scale(.85); opacity:0;}
+    }
+    @keyframes numPulse{
+      0%{opacity:0; transform:scale(.6);}
+      25%{opacity:1; transform:scale(1.25);}
+      100%{opacity:0; transform:scale(.85);}
+    }
+
+    /* 右下検索バー */
+    .search-bar{
+      position:absolute; right:16px; bottom:16px;
+      display:flex; gap:10px; align-items:center;
+      background:var(--search-bg);
+      border:1px solid var(--search-border);
+      border-radius:12px; padding:10px 12px;
+      box-shadow:var(--search-shadow);
+      z-index:4;
+    }
+    .search-bar label{ font-size:12px; color:#2a4676; }
+    .search-bar input[type="number"]{
+      width:140px; padding:8px 12px; border:1px solid #aac3e8; border-radius:10px; font-size:14px;
+      outline:none; transition:border-color .2s ease, box-shadow .2s ease;
+    }
+    .search-bar input[type="number"]:focus{
+      border-color:#6fa4ff;
+      box-shadow:0 0 0 4px rgba(111,164,255,.20);
+    }
+    .search-bar button{
+      appearance:none; border:none; background:linear-gradient(180deg, #3a86ff, #1e72ff);
+      color:#fff; padding:8px 14px; border-radius:10px; font-weight:800; font-size:14px; cursor:pointer;
+      box-shadow:0 6px 14px rgba(30,114,255,.28);
+      transition:transform .04s ease, filter .2s ease;
+    }
+    .search-bar button:active{ transform:translateY(1px); }
+
+    /* 検索ヒット強調 */
+    .seat.search-hit{
+      border-color:#1e72ff !important;
+      box-shadow:0 0 0 0 rgba(30,114,255,.0);
+      animation:searchPulse 1200ms ease-in-out 0ms 1 both;
+      position:relative;
+    }
+    .seat.search-hit::after{
+      content:"";
+      position:absolute; inset:-6px; border-radius:16px;
+      border:3px solid rgba(30,114,255,.55);
+      animation:ringOut 1200ms ease 0ms 1 both;
+    }
+    @keyframes searchPulse{
+      0%{transform:scale(1); box-shadow:0 0 0 0 rgba(30,114,255,.0);}
+      40%{transform:scale(1.18); box-shadow:0 0 30px 10px rgba(30,114,255,.40);}
+      100%{transform:scale(1); box-shadow:0 0 0 0 rgba(30,114,255,.0);}
+    }
+    @keyframes ringOut{
+      0%{opacity:1; transform:scale(1);}
+      100%{opacity:0; transform:scale(1.25);}
+    }
+
+    /* 操作パネル */
+    .panel{
+      background:var(--card); border:1px solid var(--border); border-radius:16px; padding:14px;
+      box-shadow:var(--shadow);
+    }
+    .panel h2{ margin:6px 4px 12px; font-size:16px; color:#153a78; }
+    .row{ display:flex; gap:10px; align-items:center; margin:8px 0; flex-wrap:wrap; }
+    label{ font-size:13px; color:#2a4676; }
+    input[type="number"]{
+      width:140px; padding:8px 12px; border:1px solid #aac3e8; border-radius:10px; font-size:14px;
+      outline:none; transition:border-color .2s ease, box-shadow .2s ease;
+    }
+    input[type="number"]:focus{
+      border-color:#6fa4ff; box-shadow:0 0 0 4px rgba(111,164,255,.20);
+    }
+    button{
+      appearance:none; border:none;
+      background:linear-gradient(180deg, #3a86ff, #1e72ff); color:#fff;
+      padding:9px 16px; border-radius:10px; font-weight:800; font-size:14px;
+      box-shadow:0 6px 14px rgba(30,114,255,.28); cursor:pointer;
+      transition:transform .04s ease, filter .2s ease;
+    }
+    button.secondary{
+      background:linear-gradient(180deg, #eef5ff, #e3edff);
+      color:#173463; border:1px solid #cfe0ff; box-shadow:none;
+    }
+    button:active{ transform:translateY(1px); }
+    .hint{ font-size:12px; color:#4b6c99; margin-top:2px; }
+    .sep{ height:1px; background:#e2edff; margin:12px 0; }
+    .status{
+      font-size:12px; color:#1b3e74; background:#f2f8ff;
+      border:1px dashed #cfe0ff; border-radius:12px; padding:8px;
+    }
+  </style>
+</head>
+<body>
+  <header><h1>教室席替えシステム（青基調＋手動保存・復元＋横8列整列）</h1></header>
+
+  <div class="wrap">
+    <!-- 教室 -->
+    <div id="classroom" aria-label="教室俯瞰図">
+      <div id="whiteboard" aria-hidden="true">ホワイトボード</div>
+
+      <!-- 右下検索バー -->
+      <div class="search-bar">
+        <label for="searchNumber">出席番号</label>
+        <input id="searchNumber" type="number" min="1" step="1" placeholder="例: 12" />
+        <button id="searchBtn">検索</button>
+      </div>
+    </div>
+
+    <!-- 操作パネル -->
+    <aside class="panel">
+      <h2>操作</h2>
+
+      <div class="row">
+        <button id="addSeat">席を1つ追加</button>
+        <label for="addCount">個数</label>
+        <input id="addCount" type="number" min="1" step="1" placeholder="例: 16" />
+        <button id="addMultiple" class="secondary">まとめて追加</button>
+      </div>
+      <div class="hint">席は追加順に番号が付きます。ドラッグで自由に配置できます。</div>
+
+      <div class="sep"></div>
+
+      <div class="row">
+        <label for="studentCount">学生人数</label>
+        <input id="studentCount" type="number" min="1" step="1" placeholder="例: 40" />
+        <button id="assign">割り当て</button>
+        <button id="clearAssign" class="secondary">割り当てをクリア</button>
+      </div>
+      <div class="hint">カウントダウン後、番号が中央に集結してから一斉に席へ飛びます。</div>
+
+      <div class="sep"></div>
+
+      <div class="row">
+        <button id="autoGrid" class="secondary">座席をきれいに整列（横8列）</button>
+        <button id="removeAll" class="secondary">すべての席を削除</button>
+      </div>
+
+      <div class="sep"></div>
+
+      <div class="row">
+        <button id="saveSeats" class="secondary">座席を保存</button>
+        <button id="loadSeats" class="secondary">座席を復元</button>
+      </div>
+
+      <div class="sep"></div>
+
+      <div class="status" id="statusText">席数: 0 / 割り当て済み: 0</div>
+    </aside>
+  </div>
+
+  <script>
+    // 参照
+    const classroom = document.getElementById('classroom');
+    const addSeatBtn = document.getElementById('addSeat');
+    const addCountInput = document.getElementById('addCount');
+    const addMultipleBtn = document.getElementById('addMultiple');
+    const studentCountInput = document.getElementById('studentCount');
+    const assignBtn = document.getElementById('assign');
+    const clearAssignBtn = document.getElementById('clearAssign');
+    const autoGridBtn = document.getElementById('autoGrid');
+    const removeAllBtn = document.getElementById('removeAll');
+    const saveSeatsBtn = document.getElementById('saveSeats');
+    const loadSeatsBtn = document.getElementById('loadSeats');
+    const statusText = document.getElementById('statusText');
+
+    // 検索バー
+    const searchNumberInput = document.getElementById('searchNumber');
+    const searchBtn = document.getElementById('searchBtn');
+
+    // 状態
+    let seatSeq = 0;
+    const seats = new Map(); // id -> element
+
+    // 保存・復元（手動のみ）
+    const STORAGE_KEY = 'classroom-seats-v1';
+
+    function serializeSeats(){
+      return Array.from(seats.values()).map(el => ({
+        seat: el.dataset.seat,
+        student: el.dataset.student || '',
+        left: el.style.left,
+        top: el.style.top
+      }));
+    }
+
+    function saveSeats(){
+      try{
+        const data = { seatSeq, seats: serializeSeats() };
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+        alert('座席を保存しました。');
+      }catch(e){
+        alert('保存に失敗しました。');
+      }
+    }
+
+    function loadSeats(){
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if(!raw){ alert('保存された座席がありません。'); return; }
+      try{
+        const data = JSON.parse(raw);
+        // 既存を完全クリア
+        seats.forEach(el => el.remove());
+        seats.clear();
+        seatSeq = 0;
+
+        // 復元
+        (data.seats || []).forEach(d => {
+          const el = createSeat(parseFloat(d.left), parseFloat(d.top));
+          // 席番号整合
+          el.dataset.seat = String(d.seat);
+          seatSeq = Math.max(seatSeq, parseInt(d.seat, 10));
+          const seatNoEl = el.querySelector('.seat-no');
+          if(seatNoEl) seatNoEl.textContent = `#${d.seat}`;
+          // 割り当て復元
+          if(d.student){
+            const badge = el.querySelector('.student-badge');
+            el.dataset.student = String(d.student);
+            badge.textContent = String(d.student);
+            badge.classList.add('show');
+          }
+        });
+        updateStatus();
+        alert('座席を復元しました。');
+      }catch(e){
+        alert('復元に失敗しました。データが壊れている可能性があります。');
+      }
+    }
+
+    // 基本関数
+    function updateStatus(){
+      const total = seats.size;
+      const assigned = Array.from(seats.values()).filter(el => el.dataset.student && el.dataset.student !== '').length;
+      statusText.textContent = `席数: ${total} / 割り当て済み: ${assigned}`;
+    }
+
+    function classroomRect(){ return classroom.getBoundingClientRect(); }
+    function clamp(val, min, max){ return Math.max(min, Math.min(max, val)); }
+
+    // 座席生成
+    function createSeat(x, y){
+      seatSeq += 1;
+      const el = document.createElement('div');
+      el.className = 'seat';
+      el.dataset.seat = String(seatSeq);
+      el.dataset.student = '';
+
+      el.innerHTML = `
+        <div class="label">席</div>
+        <div class="seat-no">#${seatSeq}</div>
+        <div class="student-badge"></div>
+      `;
+
+      const seatW = 86, seatH = 86;
+      const rect = classroomRect();
+      const minX = 12, minY = 104;
+      const maxX = rect.width - seatW - 12;
+      const maxY = rect.height - seatH - 12;
+      const left = clamp(x ?? Math.random() * rect.width, minX, maxX);
+      const top  = clamp(y ?? (minY + Math.random() * (rect.height - minY)), minY, maxY);
+      el.style.left = `${left}px`;
+      el.style.top  = `${top}px`;
+
+      enableDrag(el);
+      classroom.appendChild(el);
+      seats.set(el.dataset.seat, el);
+      updateStatus();
+      return el;
+    }
+
+    // ドラッグ（Pointer Events）
+    function enableDrag(el){
+      let start = null;
+      function onPointerDown(e){
+        e.preventDefault();
+        el.setPointerCapture(e.pointerId);
+        const r = el.getBoundingClientRect();
+        const cr = classroomRect();
+        start = {
+          offsetX: e.clientX - r.left,
+          offsetY: e.clientY - r.top,
+          crLeft: cr.left, crTop: cr.top, crW: cr.width, crH: cr.height
+        };
+        el.classList.add('dragging');
+      }
+      function onPointerMove(e){
+        if(!start) return;
+        const seatW = el.offsetWidth, seatH = el.offsetHeight;
+        const x = e.clientX - start.crLeft - start.offsetX;
+        const y = e.clientY - start.crTop  - start.offsetY;
+        const minX = 12, minY = 104;
+        const maxX = start.crW - seatW - 12;
+        const maxY = start.crH - seatH - 12;
+        el.style.left = clamp(x, minX, maxX) + 'px';
+        el.style.top  = clamp(y, minY, maxY) + 'px';
+      }
+      function onPointerUp(e){
+        if(!start) return;
+        el.releasePointerCapture(e.pointerId);
+        start = null;
+        el.classList.remove('dragging');
+      }
+      el.addEventListener('pointerdown', onPointerDown);
+      el.addEventListener('pointermove', onPointerMove);
+      el.addEventListener('pointerup', onPointerUp);
+      el.addEventListener('pointercancel', onPointerUp);
+    }
+
+    // シャッフル
+    function shuffle(arr){
+      for(let i=arr.length-1;i>0;i--){
+        const j = Math.floor(Math.random()*(i+1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+      }
+      return arr;
+    }
+
+    // カウントダウン
+    function runCountdown(onFinish){
+      let n = 3;
+      function tick(){
+        const cd = document.createElement('div');
+        cd.className = 'countdown';
+        const ring = document.createElement('div'); ring.className = 'ring';
+        const num = document.createElement('div'); num.className = 'num'; num.textContent = n;
+        cd.appendChild(ring); cd.appendChild(num);
+        classroom.appendChild(cd);
+        setTimeout(()=> {
+          cd.remove();
+          if(n > 1){ n--; tick(); } else { onFinish(); }
+        }, 1000);
+      }
+      tick();
+    }
+
+    // センター集結→一斉割り当て
+    function assignWithCenterBlast(numbers, seatList){
+      const overlay = document.createElement('div');
+      overlay.className = 'assign-overlay';
+      const dim = document.createElement('div'); dim.className = 'overlay-dim';
+      overlay.appendChild(dim);
+      classroom.appendChild(overlay);
+      overlay.classList.add('active');
+
+      const cr = classroomRect();
+      const centerX = cr.width / 2;
+      const centerY = 190;
+
+      const targets = seatList.map(el => {
+        const left = parseFloat(el.style.left) || 0;
+        const top  = parseFloat(el.style.top)  || 0;
+        const w = el.offsetWidth || 86;
+        const h = el.offsetHeight || 86;
+        return { x: left + w/2, y: top + h/2, el };
+      });
+
+      const scatterRadius = 62;
+      const tokens = [];
+      for(let i=0;i<numbers.length;i++){
+        const t = document.createElement('div');
+        t.className = 'token';
+        t.textContent = numbers[i];
+        const angle = Math.random()*Math.PI*2;
+        const r = scatterRadius * (0.35 + Math.random()*0.65);
+        const ix = centerX + Math.cos(angle)*r;
+        const iy = centerY + Math.sin(angle)*r;
+        t.style.left = `${ix}px`;
+        t.style.top  = `${iy}px`;
+        overlay.appendChild(t);
+        tokens.push(t);
+      }
+
+      requestAnimationFrame(()=>{
+        tokens.forEach(t=>{
+          t.classList.add('gather');
+          t.style.left = `${centerX}px`;
+          t.style.top  = `${centerY}px`;
+        });
+
+        setTimeout(()=>{
+          let completed = 0;
+          tokens.forEach((t, idx)=>{
+            const target = targets[idx];
+            const delay = (idx % 6) * 25;
+            setTimeout(()=>{
+              t.classList.remove('gather');
+              t.style.left = `${target.x}px`;
+              t.style.top  = `${target.y}px`;
+
+              const onEnd = (e)=>{
+                if(e.propertyName !== 'left' && e.propertyName !== 'top') return;
+                t.removeEventListener('transitionend', onEnd);
+
+                const seatEl = target.el;
+                const badge = seatEl.querySelector('.student-badge');
+                const numberText = String(t.textContent);
+
+                seatEl.dataset.student = numberText;
+                badge.textContent = numberText;
+                badge.classList.add('show');
+                badge.style.opacity = '1';
+
+                seatEl.classList.remove('assigned');
+                requestAnimationFrame(()=> seatEl.classList.add('assigned'));
+
+                t.style.opacity = '0';
+                setTimeout(()=>{
+                  t.remove();
+                  completed++;
+                  if(completed === tokens.length){
+                    overlay.remove();
+                    updateStatus();
+                  }
+                }, 220);
+              };
+              t.addEventListener('transitionend', onEnd);
+            }, delay);
+          });
+        }, 420);
+      });
+    }
+
+    // イベント
+    addSeatBtn.addEventListener('click', ()=> createSeat());
+
+    addMultipleBtn.addEventListener('click', ()=>{
+      const n = parseInt(addCountInput.value, 10);
+      if(!Number.isFinite(n) || n < 1){
+        alert('追加する席の個数を正しく入力してください。'); return;
+      }
+      const seatW = 86, seatH = 86, gap = 20;
+      const startX = 16, startY = 116;
+      const cols = Math.ceil(Math.sqrt(n));
+      for(let i=0;i<n;i++){
+        const r = Math.floor(i/cols);
+        const c = i % cols;
+        const x = startX + c*(seatW + gap);
+        const y = startY + r*(seatH + gap);
+        createSeat(x, y);
+      }
+    });
+
+    assignBtn.addEventListener('click', ()=>{
+      const studentCount = parseInt(studentCountInput.value, 10);
+      const seatList = Array.from(seats.values());
+      if(seatList.length === 0){ alert('席がありません。先に席を追加してください。'); return; }
+      if(!Number.isFinite(studentCount) || studentCount < 1){ alert('学生人数を正しく入力してください。'); return; }
+
+      const numbers = shuffle(Array.from({length: studentCount}, (_, i) => i+1));
+      const assignLen = Math.min(numbers.length, seatList.length);
+
+      seatList.forEach(el=>{
+        el.dataset.student = '';
+        const badge = el.querySelector('.student-badge');
+        badge.textContent = '';
+        badge.classList.remove('show');
+        el.classList.remove('assigned');
+        el.classList.remove('search-hit');
+      });
+
+      if(numbers.length > seatList.length){
+        alert(`席数が不足しています。未着席の人数: ${numbers.length - seatList.length}人`);
+      }
+
+      runCountdown(()=>{
+        assignWithCenterBlast(numbers.slice(0, assignLen), seatList.slice(0, assignLen));
+      });
+    });
+
+    clearAssignBtn.addEventListener('click', ()=>{
+      seats.forEach(el=>{
+        el.dataset.student = '';
+        const badge = el.querySelector('.student-badge');
+        badge.textContent = '';
+        badge.classList.remove('show');
+        el.classList.remove('assigned');
+        el.classList.remove('search-hit');
+      });
+      updateStatus();
+    });
+
+    // きれいに整列（横8列固定）
+    autoGridBtn.addEventListener('click', ()=>{
+      const seatList = Array.from(seats.values());
+      if(seatList.length === 0) return;
+
+      const seatW = 86, seatH = 86, gapX = 22, gapY = 22;
+      const marginX = 16, marginY = 120;
+      const cols = 8; // 横8列固定
+
+      seatList.forEach((el, idx)=>{
+        const r = Math.floor(idx / cols);
+        const c = idx % cols;
+        const left = marginX + c*(seatW + gapX);
+        const top  = marginY + r*(seatH + gapY);
+        el.style.left = `${left}px`;
+        el.style.top  = `${top}px`;
+      });
+    });
+
+    removeAllBtn.addEventListener('click', ()=>{
+      if(!confirm('すべての席を削除します。よろしいですか？')) return;
+      seats.forEach(el => el.remove());
+      seats.clear();
+      seatSeq = 0;
+      updateStatus();
+    });
+
+    // 手動保存・手動復元
+    saveSeatsBtn.addEventListener('click', ()=> saveSeats());
+    loadSeatsBtn.addEventListener('click', ()=> loadSeats());
+
+    // 検索機能
+    function clearSearchHit(){ seats.forEach(el => el.classList.remove('search-hit')); }
+    function searchByNumber(num){
+      clearSearchHit();
+      if(!Number.isFinite(num) || num < 1){ alert('検索する出席番号を正しく入力してください。'); return; }
+      const hits = Array.from(seats.values()).filter(el => el.dataset.student === String(num));
+      if(hits.length === 0){ alert('該当の出席番号は割り当てられていません。'); return; }
+      hits.forEach(el => {
+        el.classList.add('search-hit');
+        const badge = el.querySelector('.student-badge');
+        if(badge){ badge.classList.add('show'); badge.style.opacity = '1'; }
+      });
+    }
+    searchBtn.addEventListener('click', ()=>{
+      const num = parseInt(searchNumberInput.value, 10);
+      searchByNumber(num);
+    });
+    searchNumberInput.addEventListener('keydown', (e)=>{
+      if(e.key === 'Enter'){
+        const num = parseInt(searchNumberInput.value, 10);
+        searchByNumber(num);
+      }
+    });
+
+    updateStatus();
+  </script>
+</body>
+</html>
